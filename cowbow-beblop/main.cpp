@@ -2,9 +2,10 @@
 #include <vector>
 #include <array>
 #include <cmath>
+#include <algorithm>
 
 int count = 0;
-bool debug_mode = false;
+bool debug_mode = true;
 
 #define dbg \
     if (!debug_mode) {} \
@@ -32,6 +33,11 @@ struct Vec3
     Vec3 operator/(float scalar) const
     {
         return { this->x / scalar, this->y / scalar, this->z / scalar };
+    }
+
+    bool operator==(const Vec3& other) const
+    {
+        return this->x == other.x && this->y == other.y && this->z == other.z;
     }
 
     Vec3 cross(const Vec3& other) const
@@ -87,6 +93,7 @@ std::ostream& operator<<(std::ostream& out, const Polygon& poly)
 struct Triangle
 {
     std::array<Vec3, 3> vertices;
+    bool has_intersected = false;
 };
 
 std::ostream& operator<<(std::ostream& out, const Triangle& tri)
@@ -103,6 +110,7 @@ struct Line
     Vec3 start;
     Vec3 end;
     Vec3 dir;
+    bool has_intersected = false;
 };
 
 std::ostream& operator<<(std::ostream& out, const Line& l)
@@ -175,45 +183,101 @@ std::vector<Line> get_lines_for_poly(const Polygon& poly)
     return lines;
 }
 
-bool line_intersects_tri(const Line& line, const Triangle& tri)
+// Checks if line intersects triangle (other than the points in intersected_points), adding intersection point to the third argument if so
+void intersect_line_tri(
+        std::vector<Line>& lines,
+        std::vector<Triangle>& tris,
+        std::vector<Vec3>& intersected_points,
+        int& isct_count
+        )
 {
-    // Checking whether line intersects plane
-    Vec3 isct_point;
-    Vec3 normal = (tri.vertices[1] - tri.vertices[0]).cross((tri.vertices[2] - tri.vertices[0]));
+    for (auto line = lines.begin(); line != lines.end(); ++line)
     {
-        // calculate plane
-        float d = normal.dot(tri.vertices[0]);
+        for (auto tri = tris.begin(); tri != tris.end(); ++tri)
+        {
+            // Checking whether line intersects plane
+            Vec3 isct_point;
+            Vec3 normal = (tri->vertices[1] - tri->vertices[0]).cross((tri->vertices[2] - tri->vertices[0]));
+            {
+                // calculate plane
+                float d = normal.dot(tri->vertices[0]);
 
-        if (normal.dot(line.dir) == 0) {
-            return false; // Line parallel to plane
+                if (normal.dot(line->dir) == 0)
+                {
+                    // Then line is parallel to plane
+                   
+                    if ((line->start - tri->vertices[0]).dot(normal) == 0 
+                            && (line->end - tri->vertices[0]).dot(normal) == 0)
+                    {
+                        // Then line is on the plane
+
+                        auto next_line = line + 1 == lines.end() ? lines.begin() : line + 1;
+                        auto prev_line = line == lines.begin() ? lines.end() - 1 : line - 1;
+
+                        if (next_line->dir.dot(prev_line->dir) > 0)
+                        {
+                            // Then adjacent lines are pointing in the same direction, thus need to add one to count
+                            --isct_count;
+                        } // otherwise do nothing.
+                    }
+
+                    continue; // Line parallel to plane
+                }
+
+                // Compute the t value for the directed line ray intersecting the plane
+                float t = (d - normal.dot(line->start)) / normal.dot(line->dir);
+
+                dbg << t << '\n';
+
+                if (t < 0 || t > 1)
+                    continue; // line does not
+
+                isct_point = line->start + line->dir * t;
+
+                if (std::find(intersected_points.begin(), intersected_points.end(), isct_point) 
+                        != intersected_points.end())
+                    continue; // we have already accounted this point;
+            }
+
+            // Checking whether line intersects triangle
+            {
+                dbg << "here" << "\n";
+                dbg << isct_point << '\n';
+
+                Vec3 v0 = tri->vertices[1] - tri->vertices[0];
+                Vec3 v1 = tri->vertices[2] - tri->vertices[0];
+                Vec3 v2 = isct_point - tri->vertices[0];
+
+                float d00 = v0.dot(v0);
+                float d01 = v0.dot(v1);
+                float d11 = v1.dot(v1);
+                float d20 = v2.dot(v0);
+                float d21 = v2.dot(v1);
+
+                float denom = d00 * d11 - d01 * d01;
+                float a = (d11 * d20 - d01 * d21) / denom;
+                float b = (d00 * d21 - d01 * d20) / denom;
+                float c = 1 - a - b;
+
+                /* float tri_area_2 = normal.mag(); */
+                /* float a = ((tri.vertices[1] - isct_point).cross((tri.vertices[2] - isct_point))).mag() / tri_area_2; */
+                /* float b = ((tri.vertices[2] - isct_point).cross((tri.vertices[0] - isct_point))).mag() / tri_area_2; */
+                /* float c = 1 - a - b; */
+
+                dbg << a << b << c << '\n';
+
+                auto is_within_range = [&](float n) { return n >= 0 && n <= 1; };
+
+                if (is_within_range(a) && is_within_range(b) && is_within_range(c)) {
+                    intersected_points.push_back(isct_point);
+                    ++isct_count;
+                    dbg << "Is within" << '\n';
+                }
+            }
+
         }
-
-        // Compute the t value for the directed line ray intersecting the plane
-        float t = (d - normal.dot(line.start)) / normal.dot(line.dir);
-
-        dbg << t << '\n';
-
-        if (t < 0 || t > 1) {
-            return false; // line does not
-        }
-
-        isct_point = line.start + line.dir * t;
     }
 
-    // Checking whether line intersects triangle
-    {
-        dbg << "here" << "\n";
-        dbg << isct_point << '\n';
-        float tri_area_2 = normal.mag();
-        float a = ((tri.vertices[1] - isct_point).cross((tri.vertices[2] - isct_point))).mag() / tri_area_2;
-        float b = ((tri.vertices[2] - isct_point).cross((tri.vertices[0] - isct_point))).mag() / tri_area_2;
-        float c = 1 - a - b;
-
-        dbg << a << b << c << '\n';
-
-        auto is_within_range = [&](float n) { return n >= 0 && n <= 1; };
-        return is_within_range(a) && is_within_range(b) && is_within_range(c);
-    }
 }
 
 int main(int argc, char *argv[])
@@ -229,19 +293,11 @@ int main(int argc, char *argv[])
 
     int isct_count = 0;
 
-    for (auto& line : second_poly_lines)
-    {
-        dbg << line << '\n';
-        for (auto& tri : first_poly_tris)
-        {
-            dbg << tri << '\n';
-            if (line_intersects_tri(line, tri))
-            {
-                dbg << "Is within" << '\n';
-                ++isct_count;
-            }
-        }
-    }
+    std::vector<Vec3> intersected_points;
+
+    intersect_line_tri(second_poly_lines, first_poly_tris, intersected_points, isct_count);
+
+    dbg << "\nIntersection count: " << isct_count << '\n';
 
     if (isct_count % 2 == 0)
         std::cout << "NO\n";
